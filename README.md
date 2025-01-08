@@ -32,7 +32,8 @@ All the tests of the FARMSENSE UAV front were performed on an Ubuntu 22.04.4 LTS
 The following commands are also required to guarantee the correct installation of the gstreamer python repository:
 ```
 sudo apt-get install gir1.2-gtk-3.0    gstreamer1.0-tools     gstreamer1.0-plugins-base     gstreamer1.0-plugins-good     gstreamer1.0-plugins-bad     gstreamer1.0-plugins-ugly     gstreamer1.0-libav     gstreamer1.0-gtk3     gstreamer1.0-pulseaudio     python3-gst-1.0     gir1.2-gst-rtsp-server-1.0
-
+sudo apt-get install mosquitto
+sudo apt-get install mosquitto-clients
 pip install pycairo PyGObject
 ```
 
