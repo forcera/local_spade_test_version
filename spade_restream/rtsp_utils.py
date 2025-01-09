@@ -44,7 +44,7 @@ class restreaming(GstRtspServer.RTSPMediaFactory):
         self.frame_condition = threading.Condition()
 
         # Redis configurations to set up and receive the frames
-        self.redis_client = redis.Redis(host='localhost', port=6379, db=0, health_check_interval=30)
+        self.redis_client = redis.Redis(host='spade_redis_1', port=6379, db=0, health_check_interval=30)
         self.frame_subscription = self.redis_client.pubsub()
         self.frame_subscription.subscribe(**{'frame_buffer': self.buffer_callback})
         self.frame = None
