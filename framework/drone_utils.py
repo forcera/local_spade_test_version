@@ -96,7 +96,6 @@ class position_register(olympe.EventListener):
                 self.mqtt_publisher(event_message, self.mqtt_broker["telemetry_topic"])  # sending telemetry mqtt message
                 self.mqtt_publisher(camera_dict, self.mqtt_broker["camera_topic"])  # sending camera info mqtt message
                 self.last_update = datetime.datetime.now()  # update the last_update published variable
-                #print(event_message)
 
     def json_serial(self, obj):  # function to handle datetime data entries (convert to json serializable)
         '''

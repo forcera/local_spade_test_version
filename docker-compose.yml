@@ -22,39 +22,53 @@ services:
       - ./mosquitto:/etc/mosquitto
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
 
+  spade_thingy_data_collector:
+    image: registry.gitlab.com/forcera/farmsense/spade_thingy_data_collector:latest
+    environment:
+      - COLLECTOR_MQTT_BROKER=${COLLECTOR_MQTT_BROKER:-test.mosquitto.org}
+      - COLLECTOR_MQTT_PORT=${COLLECTOR_MQTT_PORT:-1883}
+      - COLLECTOR_MQTT_TOPIC=${COLLECTOR_MQTT_TOPIC:-thingy/accelerometer_data}
+      - COLLECTOR_CSV_FILE_PATH=${COLLECTOR_CSV_FILE_PATH:-thingy_data.csv}
+    volumes:
+      - ./thingy_data:/app/thingy_data
+    depends_on:
+      - mqtt
+
   redis:
     image: redis:latest
     restart: unless-stopped
     command: redis-server
     container_name: spade_redis_1
 
-  #spade_restream:
-  #  image: registry.gitlab.com/forcera/farmsense/spade_restream:latest
-  #  environment:
-  #    - FRAMEWORK_LOCAL_MQTT_BROKER=${FRAMEWORK_LOCAL_MQTT_BROKER:-mosquitto}
-  #    - FRAMEWORK_MQTT_PORT=${FRAMEWORK_MQTT_PORT:-1883}
-  #    - FRAMEWORK_DRONE_MQTT_TOPIC=${FRAMEWORK_DRONE_MQTT_TOPIC:-drone/telemetry_data}
-  #  ports:
-  #    - "31415:31415"
-  #  depends_on:
-  #    - mqtt
-  #    - redis
+  framework:
+    build: ./framework
+    environment:
+      - FRAMEWORK_CONNECT_HW=${FRAMEWORK_CONNECT_HW:-drone}
+      - FRAMEWORK_LOCAL_MQTT_BROKER=${FRAMEWORK_LOCAL_MQTT_BROKER:-mosquitto}
+      - FRAMEWORK_MQTT_PORT=${FRAMEWORK_MQTT_PORT:-1883}
+      - FRAMEWORK_DRONE_MQTT_TOPIC=${FRAMEWORK_DRONE_MQTT_TOPIC:-drone/telemetry_data}
+      - FRAMEWORK_DRONE_CAMERA_TOPIC=${FRAMEWORK_DRONE_CAMERA_TOPIC:-drone/camera_info}
+      - FRAMEWORK_DRONE_IP=${FRAMEWORK_DRONE_IP:-10.202.0.1}
+      - FRAMEWORK_TELEMETRY_SAMPLING_TIME=${FRAMEWORK_TELEMETRY_SAMPLING_TIME:-5}
+      - FRAMEWORK_FREE_FLIGHT_FLAG=${FRAMEWORK_FREE_FLIGHT_FLAG:-True}
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    depends_on:
+      - mqtt
+      - redis
 
-  #framework:
-  #  build: ./framework
-  #  environment:
-  #    - FRAMEWORK_LOCAL_MQTT_BROKER=${FRAMEWORK_LOCAL_MQTT_BROKER:-mosquitto}
-  #    - FRAMEWORK_MQTT_PORT=${FRAMEWORK_MQTT_PORT:-1883}
-  #    - FRAMEWORK_DRONE_MQTT_TOPIC=${FRAMEWORK_DRONE_MQTT_TOPIC:-drone/telemetry_data}
-  #    - FRAMEWORK_DRONE_CAMERA_TOPIC=${FRAMEWORK_DRONE_CAMERA_TOPIC:-drone/camera_info}
-  #    - FRAMEWORK_DRONE_IP=${FRAMEWORK_DRONE_IP:-10.202.0.1}
-  #    - FRAMEWORK_TELEMETRY_SAMPLING_TIME=${FRAMEWORK_TELEMETRY_SAMPLING_TIME:-5}
-  #    - FRAMEWORK_FREE_FLIGHT_FLAG=${FRAMEWORK_FREE_FLIGHT_FLAG:-True}
-  #  privileged: true
-  #  cap_add:
-  #    - NET_ADMIN
-  #  devices:
-  #    - /dev/net/tun
-  #  depends_on:
-  #    - mqtt
-  #    - redis
+  spade_restream:
+    #image: registry.gitlab.com/forcera/farmsense/spade_restream:latest
+    build: ./spade_restream
+    environment:
+      - FRAMEWORK_LOCAL_MQTT_BROKER=${FRAMEWORK_LOCAL_MQTT_BROKER:-mosquitto}
+      - FRAMEWORK_MQTT_PORT=${FRAMEWORK_MQTT_PORT:-1883}
+      - FRAMEWORK_DRONE_MQTT_TOPIC=${FRAMEWORK_DRONE_MQTT_TOPIC:-drone/telemetry_data}
+    ports:
+      - "31415:31415"
+    depends_on:
+      - mqtt
+      - redis

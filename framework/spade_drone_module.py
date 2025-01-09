@@ -22,8 +22,10 @@ class hardware_data:
         self.hardware_info = os.getenv('FRAMEWORK_CONNECT_HW')
         self.hardware_info = self.hardware_info.lower()
         if self.hardware_info == 'drone':
+            print('[spade_drone_module] Setting up drone...')
             self.drone = olympe.Drone(self.DRONE_IP)
         elif self.hardware_info == 'skycontroller':
+            print('[spade_drone_module] Setting up controller...')
             self.drone = olympe.SkyController(self.DRONE_IP)
         else:
             raise TypeError(f'[drone_utils] Hardware option {self.hardware_info} not available!')

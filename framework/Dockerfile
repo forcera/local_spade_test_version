@@ -51,8 +51,8 @@ RUN DEBIAN_FRONTEND="noninteractive" \
     redis-server=5:5.0.7-2ubuntu0.1 \
     python3-gi=3.36.0-1 \
     python3-gi-cairo=3.36.0-1 \
-    gir1.2-gtk-3.0=3.24.20-0ubuntu1.2 \
-   gstreamer1.0-tools \
+    gir1.2-gtk-3.0 \
+    gstreamer1.0-tools \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
@@ -66,6 +66,8 @@ RUN DEBIAN_FRONTEND="noninteractive" \
     rm -rf /var/lib/apt/lists/* && \
     python3 <(curl https://bootstrap.pypa.io/get-pip.py) && \
     pip3 install --no-cache-dir -r ./framework/requirements.txt && \
+    apt-get install -y mosquitto && \
+    apt-get install -y mosquitto-clients && \
     chmod +x ./framework/start.sh  
 
 ENTRYPOINT ["python3", "-u","./framework/spade_drone_module.py"]

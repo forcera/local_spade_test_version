@@ -18,4 +18,6 @@ uvicorn==0.30.3
 parrot-olympe==7.7.4
 opencv-python-headless==4.10.0.84
 redis==5.0.8
-PySDL2==0.9.16
+PyGObject
+PySDL2
+PyOpenGL==3.1.1a1
