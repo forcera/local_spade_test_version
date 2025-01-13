@@ -64,7 +64,7 @@ class rtsp_processing:
         #redis configurations to save the frames
         self.full_sigmund = np.zeros((self.stream_height, self.stream_width, 3)) #no signal screen image
         self.full_sigmund = self.add_text_image(self.full_sigmund, f'NO SIGNAL', (30, 30), 0.5, color=(255, 255, 255))  #add text to the no signal screen image
-        self.redis_client = redis.Redis(host='localhost', port=6379, db=0, health_check_interval=30)
+        self.redis_client = redis.Redis(host='spade_redis_1', port=6379, db=0, health_check_interval=30)
         try:
             self.redis_client.ping()
             print('[rtsp_utils] Connected to the Redis server!')
@@ -236,7 +236,7 @@ class restreaming(GstRtspServer.RTSPMediaFactory):
         self.frame_condition = threading.Condition()
 
         #Redis configurations to set up and receive the frames
-        self.redis_client = redis.Redis(host='localhost', port=6379, db=0, health_check_interval=30)
+        self.redis_client = redis.Redis(host='spade_redis_1', port=6379, db=0, health_check_interval=30)
         self.frame_subscription = self.redis_client.pubsub()
         self.frame_subscription.subscribe(**{'frame_buffer': self.buffer_callback})
         self.frame = None

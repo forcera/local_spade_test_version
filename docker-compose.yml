@@ -28,8 +28,27 @@ services:
     command: redis-server
     container_name: spade_redis_1
 
+  #framework:
+  #  build: ./framework
+  #  environment:
+  #    - FRAMEWORK_LOCAL_MQTT_BROKER=${FRAMEWORK_LOCAL_MQTT_BROKER:-mosquitto}
+  #    - FRAMEWORK_MQTT_PORT=${FRAMEWORK_MQTT_PORT:-1883}
+  #    - FRAMEWORK_DRONE_MQTT_TOPIC=${FRAMEWORK_DRONE_MQTT_TOPIC:-drone/telemetry_data}
+  #    - FRAMEWORK_DRONE_CAMERA_TOPIC=${FRAMEWORK_DRONE_CAMERA_TOPIC:-drone/camera_info}
+  #    - FRAMEWORK_DRONE_IP=${FRAMEWORK_DRONE_IP:-10.202.0.1}
+  #    - FRAMEWORK_TELEMETRY_SAMPLING_TIME=${FRAMEWORK_TELEMETRY_SAMPLING_TIME:-5}
+  #    - FRAMEWORK_FREE_FLIGHT_FLAG=${FRAMEWORK_FREE_FLIGHT_FLAG:-True}
+  #  privileged: true
+  #  cap_add:
+  #    - NET_ADMIN
+  #  devices:
+  #    - /dev/net/tun
+  #  depends_on:
+  #    - mqtt
+  #    - redis
+
   spade_restream:
-    image: registry.gitlab.com/forcera/farmsense/spade_restream:latest
+    build: ./spade_restream
     environment:
       - FRAMEWORK_LOCAL_MQTT_BROKER=${FRAMEWORK_LOCAL_MQTT_BROKER:-mosquitto}
       - FRAMEWORK_MQTT_PORT=${FRAMEWORK_MQTT_PORT:-1883}

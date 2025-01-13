@@ -49,7 +49,7 @@ class module_init:
         #RTSP stream processing setup
         self.frame_queue = queue.Queue()  # queue to consume from incoming frames
         self.stream_obj = rtsp_utils.rtsp_processing(self.data_acq_obj, stream_event)  #open the drone camera and start processing
-        time.sleep(30) #wait 30 seconds before writing to redis to set up the stream side without delay
+        time.sleep(15) #wait 30 seconds before writing to redis to set up the stream side without delay
 
         #Define the threads
         self.stream_thread = threading.Thread(target=self.stream_obj.run_stream) #define the target for the thread
