@@ -27,3 +27,15 @@ services:
     restart: unless-stopped
     command: redis-server
     container_name: spade_redis_1
+
+  spade_restream:
+    image: registry.gitlab.com/forcera/farmsense/spade_restream:latest
+    environment:
+      - FRAMEWORK_LOCAL_MQTT_BROKER=${FRAMEWORK_LOCAL_MQTT_BROKER:-mosquitto}
+      - FRAMEWORK_MQTT_PORT=${FRAMEWORK_MQTT_PORT:-1883}
+      - FRAMEWORK_DRONE_MQTT_TOPIC=${FRAMEWORK_DRONE_MQTT_TOPIC:-drone/telemetry_data}
+    ports:
+      - "31415:31415"
+    depends_on:
+      - mqtt
+      - redis
