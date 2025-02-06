@@ -31,5 +31,5 @@ class hardware_data:
 load_dotenv()
 hardware_ip = os.getenv('FRAMEWORK_DRONE_IP')
 free_flight_flag = os.getenv('FRAMEWORK_FREE_FLIGHT_FLAG')
-mission_obj = module_utils.module_init(hardware_data(hardware_ip), 554, free_flight=bool(strtobool(free_flight_flag)))
+mission_obj = module_utils.module_init(hardware_data(hardware_ip), free_flight=bool(strtobool(free_flight_flag)))
 mission_obj.run_threads()

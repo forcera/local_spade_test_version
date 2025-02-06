@@ -20,7 +20,194 @@ gi.require_version("Gst", "1.0")
 gi.require_version("GstRtspServer", "1.0")
 from gi.repository import Gst, GstRtspServer, GObject, GLib
 import numpy as np
-import olympe
+
+
+class rtsp_processing:
+    def __init__(self, drone_obj):
+        '''
+        :param drone_obj: object of the anafi drone already connected
+        :param rtsp_port: the name to be defined for the rtsp server (554 by default)
+        '''
+        self.drone = drone_obj #drone object from olympe sdk
+        self.renderer = None
+        self.h264_frame_stats = []
+
+
+        #Video frame size and format
+        self.stream_fps = 30 #average frame rate of the video capture
+        self.stream_width = 1280 #width of the video capture
+        self.stream_height = 720 #height of the video capture
+        self.pixel_fmt = 'yuv420p' #pixel format of the video capture
+        print(f'fps:{self.stream_fps}, width:{self.stream_width}, heigth:{self.stream_height}, px:{self.pixel_fmt}')
+
+        #MQTT broker configs to acquire telemetry data
+        load_dotenv()  #load the env. variables
+        self.mqtt_broker = {
+            "host": os.getenv('FRAMEWORK_LOCAL_MQTT_BROKER'),
+            "keepalive": 60,
+            "port": int(os.getenv('FRAMEWORK_MQTT_PORT')),  #broker port
+            "topic": os.getenv('FRAMEWORK_DRONE_MQTT_TOPIC'),  #mqtt topic
+        }
+        self.mqtt_client = mqtt.Client()  #mqtt client
+        self.message_queue = queue.Queue(maxsize=50)
+
+        #redis configurations to save the frames
+        self.full_sigmund = np.zeros((self.stream_height, self.stream_width, 3)) #no signal screen image
+        self.full_sigmund = self.add_text_image(self.full_sigmund, f'NO SIGNAL', (30, 30), 0.5, color=(255, 255, 255))  #add text to the no signal screen image
+        self.redis_client = redis.Redis(host=os.getenv('RESTREAM_REDIS_HOST'), port=6379, db=0, health_check_interval=30)
+        try:
+            self.redis_client.ping()
+            print('[rtsp_utils] Connected to the Redis server!')
+        except redis.exceptions.ConnectionError:
+            raise ValueError('[rtsp_utils] Failed to connect to the Redis Server!')
+
+    def add_text_image(self, original_image, text, org, scale, color=(0,0,0)):
+        '''
+        :param original_image: pre-processing frame without text data
+        :param text: text to add to the frame
+        :param org: coordinates of the bottom left of the text string
+        :param scale: scale of the text
+        :param color: color of the text in BGR mode (black by default)
+        :return: the frame with the text added
+        '''
+
+        proc_image = cv2.putText(original_image,
+                                 text,
+                                 org=org,
+                                 fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                                 fontScale=scale,
+                                 color=color,
+                                 thickness=1,
+                                 lineType=cv2.LINE_AA)
+        return proc_image
+
+    def yuv_frame_cb_wrapper(self, frame_queue):
+        """
+        Creates a callback function that uses the provided frame_queue.
+        """
+        def yuv_frame_cb(yuv_frame):
+            """
+            This function will be called by Olympe for each decoded YUV frame.
+            :type yuv_frame: olympe.VideoFrame
+            """
+            yuv_frame.ref()
+            frame_queue.put_nowait(yuv_frame)  # Put frame in provided queue
+        return yuv_frame_cb
+
+    def flush_cb_wrapper(self, frame_buffer):
+        def flush_cb(stream):
+            if stream["vdef_format"] != olympe.VDEF_I420:
+                return True
+            while not frame_buffer.empty():
+                frame_buffer.get_nowait().unref()
+            return True
+        return flush_cb
+
+    def start_cb(self):
+        pass
+
+    def end_cb(self):
+        pass
+
+    def h264_frame_cb(self, h264_frame):
+        """
+        This function will be called by Olympe for each new h264 frame.
+
+            :type yuv_frame: olympe.VideoFrame
+        """
+        pass
+
+    def retrieve_frames(self, stream_flag_event, frame_buffer):
+        '''
+        :param stream_flag_event: the event object of the thread to monitor
+        '''
+        offline_flag = False #flag to monitor the evolution of the event state
+        last_telemetry = 'waiting telemetry data...'  #variable to update when no message has been received prior to last update
+        if not offline_flag:
+            while True:
+                if offline_flag:
+                    break
+
+                curr_yuv_frame = frame_buffer.get()
+                curr_frame = curr_yuv_frame.as_ndarray() #read the frame as array
+
+                #Avoiding blockage by empty queue
+                if not self.message_queue.empty():
+                    curr_telemetry = f'{self.message_queue.get()}'  #only get() from the queue if not empty
+                    last_telemetry = curr_telemetry #update the text variable
+                else:
+                    curr_telemetry = last_telemetry  #string to avoid blocking and keep printing the last update
+
+                curr_array = self.add_text_image(curr_frame, curr_telemetry, (30,30), 0.25) #add telemetry data to the video
+                _, buffer = cv2.imencode('.jpg', curr_array) #decode the array to .jpg image
+                self.redis_client.publish('frame_buffer', buffer.tobytes()) #publish in the redis topic
+
+
+    def offline_mode(self, stream_flag_event):
+        '''
+        :param stream_flag_event: the event object of the thread to monitor
+        '''
+        print(f'[rtsp_utils] The flight image is offline, full sigmund mode...')
+        self.message_queue.queue.clear() #clear the mqtt data queue
+        offline_flag = True
+        while offline_flag:
+                offline_flag = stream_flag_event.is_set() #upodate the flag with the current state
+                _, buffer = cv2.imencode('.jpg', self.full_sigmund)  #decode the array to .jpg image
+                self.redis_client.publish('frame_buffer', buffer.tobytes())  #publish in the redis topic
+                time.sleep(5) #sleep between publishes to avoid over-filling the buffer
+
+    def run_frame_acquiring(self, stream_flag_event, frame_buffer):
+        '''
+        :param stream_flag_event: the event object of the thread to monitor
+        '''
+        print('[rtsp_utils] Frame acquiring!')
+        while True:
+            if not stream_flag_event.is_set():
+                self.retrieve_frames(stream_flag_event, frame_buffer) #run the drone camera stream
+            else:
+                self.offline_mode(stream_flag_event) #run the offline camera mode stream
+
+    def run_stream(self, frame_buffer):
+        # Setup your callback functions to do some live video processing
+        self.drone.streaming.set_callbacks(
+            raw_cb=self.yuv_frame_cb_wrapper(frame_buffer),
+            h264_cb=self.h264_frame_cb,
+            start_cb=self.start_cb,
+            end_cb=self.end_cb,
+            flush_raw_cb=self.flush_cb_wrapper(frame_buffer),
+        )
+
+        # Start video streaming
+        self.drone.streaming.start()
+
+    def on_message(self, client, userdata, msg):
+        '''
+        :param client: MQTT client object
+        :param userdata: Userdata attribute from the MQTT client
+        :param msg: the message received from the topic
+        :return: pushes the received message to the buffer
+        '''
+        #Add the current processed frame to the queue
+        if not self.message_queue.full():
+            self.message_queue.put(msg.payload.decode())
+        else:
+            self.message_queue.get()
+            self.message_queue.put(msg.payload.decode())
+
+    def write_telemetry_data(self):
+        '''
+        :return: subscribes to the accelerometer MQTT topic and pushes data to the message buffer
+        '''
+	    #Handling connection issues
+        if self.mqtt_client.connect(host=self.mqtt_broker["host"],
+                                    port=self.mqtt_broker["port"],
+                                    keepalive=self.mqtt_broker["keepalive"]) != 0:
+            raise TypeError("[drone_utils] Could not connect to the MQTT broker!")
+        print(f'[rtsp_utils] Connected to the MQTT Broker at {self.mqtt_broker["host"]}:{self.mqtt_broker["port"]}!')
+
+        self.mqtt_client.subscribe(self.mqtt_broker["topic"]) #subscribe to the telemetry data topic
+        self.mqtt_client.on_message = self.on_message
+        self.mqtt_client.loop_start()
 
 class restreaming(GstRtspServer.RTSPMediaFactory):
     def __init__(self, url_data, **properties):
@@ -30,30 +217,27 @@ class restreaming(GstRtspServer.RTSPMediaFactory):
         '''
 
         super(restreaming, self).__init__(**properties)
-        # self.rtsp_data = rtsp_data  #initiated rtsp_config class
-        self.url_data = url_data  # dictionary with output url info
+        #self.rtsp_data = rtsp_data  #initiated rtsp_config class
+        self.url_data = url_data  #dictionary with output url info
         self.restream_launch = 'appsrc name=source is-live=true block=true format=GST_FORMAT_TIME ' \
                                'caps=video/x-raw,format=BGR,width={},height={},framerate={}/1 ' \
                                '! videoconvert ! video/x-raw,format=I420 ' \
                                '! x264enc speed-preset=ultrafast tune=zerolatency ' \
                                '! rtph264pay config-interval=1 name=pay0 pt=96' \
-            .format(self.url_data["stream_width"], self.url_data["stream_height"],
-                    self.url_data["stream_fps"])  # gstreamer launch command
-        self.number_frames = 0  # number of processed frames from the original url
-        self.frame_buffer = None  # buffer to process incoming frames from the original url
+            .format(self.url_data["stream_width"], self.url_data["stream_height"], self.url_data["stream_fps"])  #gstreamer launch command
+        self.number_frames = 0  #number of processed frames from the original url
+        self.frame_buffer = None  #buffer to process incoming frames from the original url
         self.frame_condition = threading.Condition()
 
-        # Redis configurations to set up and receive the frames
-        self.redis_client = redis.Redis(host='spade_redis_1', port=6379, db=0, health_check_interval=30)
+        #Redis configurations to set up and receive the frames
+        self.redis_client = redis.Redis(host=os.getenv('RESTREAM_REDIS_HOST'), port=6379, db=0, health_check_interval=30)
         self.frame_subscription = self.redis_client.pubsub()
         self.frame_subscription.subscribe(**{'frame_buffer': self.buffer_callback})
         self.frame = None
-        self.full_sigmund = np.zeros((self.url_data['stream_height'], self.url_data['stream_width'], 3),
-                                     dtype=np.uint8)  # no signal screen image
-        self.offline_frame = self.add_text_image(self.full_sigmund, f'NO SIGNAL', (30, 30), 0.5,
-                                                 color=(255, 255, 255))  # add text to the no signal screen image
+        self.full_sigmund = np.zeros((self.url_data['stream_height'], self.url_data['stream_width'], 3), dtype=np.uint8)  #no signal screen image
+        self.offline_frame = self.add_text_image(self.full_sigmund, f'NO SIGNAL', (30, 30), 0.5, color=(255, 255, 255))  #add text to the no signal screen image
 
-    def add_text_image(self, original_image, text, org, scale, color=(0, 0, 0)):
+    def add_text_image(self, original_image, text, org, scale, color=(0,0,0)):
         '''
         :param original_image: pre-processing frame without text data
         :param text: text to add to the frame
@@ -78,8 +262,8 @@ class restreaming(GstRtspServer.RTSPMediaFactory):
         :param message: the data structure received on the Redis topic
         :return: converts the received frame to array and sets the attribute frame to the array
         '''
-        frame_data = np.frombuffer(message['data'], np.uint8)  # aquire the data in bytes from the buffer
-        frame = cv2.imdecode(frame_data, cv2.IMREAD_COLOR)  # decode the data as an image
+        frame_data = np.frombuffer(message['data'], np.uint8) #aquire the data in bytes from the buffer
+        frame = cv2.imdecode(frame_data, cv2.IMREAD_COLOR) #decode the data as an image
         self.frame = np.array(frame)
         return True
 
@@ -91,21 +275,21 @@ class restreaming(GstRtspServer.RTSPMediaFactory):
         '''
         with self.frame_condition:
             while True:
-                redis_msg = self.frame_subscription.get_message()  # get the current frame
+                redis_msg = self.frame_subscription.get_message() #get the current frame
 
                 if self.frame is None:
-                    self.frame = self.offline_frame  # in case the frame generator script is offline, add the offline image automatically
+                    self.frame = self.offline_frame #in case the frame generator script is offline, add the offline image automatically
                     continue
 
                 curr_frame = self.frame.tobytes()
-                self.frame_buffer = Gst.Buffer.new_allocate(None, len(curr_frame), None)  # add frame to buffer
+                self.frame_buffer = Gst.Buffer.new_allocate(None, len(curr_frame), None)  #add frame to buffer
                 self.frame_buffer.fill(0, curr_frame)
-                self.frame_buffer.duration = (1 / 30) * Gst.SECOND  # frame duration
-                timestamp = self.number_frames * self.frame_buffer.duration  # timestamp of the frame
+                self.frame_buffer.duration = (1 / 30) * Gst.SECOND  #frame duration
+                timestamp = self.number_frames * self.frame_buffer.duration  #timestamp of the frame
                 self.frame_buffer.pts = self.frame_buffer.dts = int(timestamp)
-                self.number_frames += 1  # update the processed frames number
+                self.number_frames += 1  #update the processed frames number
                 retval = src.emit('push-buffer', self.frame_buffer)
-                break  # gstreamer bugfix
+                break #gstreamer bugfix
 
     def do_create_element(self, url):
         '''
@@ -134,7 +318,6 @@ class restreaming(GstRtspServer.RTSPMediaFactory):
         loop_thread.start()
         loop_thread.join()
 
-
 class rtsp_server:
     def __init__(self, url_data):
         '''
@@ -151,7 +334,7 @@ class rtsp_server:
         self.stream.add_factory(self.url_data["name"], self.factory)
         self.server.attach(None)
 
-        if self.url_data["ip"] == "0.0.0.0":  # nosec B104
+        if self.url_data["ip"] == "0.0.0.0":
             ip_string = "127.0.0.1"
         else:
             ip_string = self.url_data["ip"]

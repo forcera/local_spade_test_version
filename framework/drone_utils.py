@@ -15,6 +15,7 @@ import os
 import olympe
 from olympe.messages.skyctrl.CoPiloting import setPilotingSource
 import json
+import time
 
 class position_register(olympe.EventListener):
     default_queue_size = 500 #default queue size for register methods
@@ -96,7 +97,6 @@ class position_register(olympe.EventListener):
                 self.mqtt_publisher(event_message, self.mqtt_broker["telemetry_topic"])  # sending telemetry mqtt message
                 self.mqtt_publisher(camera_dict, self.mqtt_broker["camera_topic"])  # sending camera info mqtt message
                 self.last_update = datetime.datetime.now()  # update the last_update published variable
-                #print(event_message)
 
     def json_serial(self, obj):  # function to handle datetime data entries (convert to json serializable)
         '''
@@ -154,6 +154,8 @@ class data_acquisition:
             offline_flag = flight_flag_event.is_set()
             if offline_flag:
                 #self.position_event_register.unsubscribe()  # unsubscribe to the event messages
+                #self.mission_data.drone.streaming.stop()
+                self.mission_data.drone.streaming.stop()
                 if self.mission_data.drone.disconnect():
                     print('[drone_utils] Disconnected and mission complete!')
                     break

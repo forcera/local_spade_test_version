@@ -23,25 +23,15 @@ import numpy as np
 import olympe
 
 class rtsp_processing:
-    def __init__(self, drone_obj, stream_event):
+    def __init__(self, drone_obj):
         '''
         :param drone_obj: object of the anafi drone already connected
-        :param stream_event: event to manage thread condition
+        :param rtsp_port: the name to be defined for the rtsp server (554 by default)
         '''
-        #check the connection to the drone obj
-        self.acq_data = drone_obj #drone_utils class object
-        drone_status = drone_obj.mission_data.drone.connection_state()
-        if drone_status:
-            print(f'[rtsp_utils] Drone connection state = {drone_status}')
-        else:
-            raise TypeError(f'[rtsp_utils] Drone connection state = {drone_status}')
+        self.drone = drone_obj #drone object from olympe sdk
+        self.renderer = None
+        self.h264_frame_stats = []
 
-        #Olympe streaming object configuration
-        self.h264_frame_stats = [] #frame statistics
-        self.frame_queue = queue.Queue() #queue to consume from incoming frames
-        #self.frame_proc_thread = threading.Thread(target=self.run_frame_acq, args=(stream_event,)) #thread to produce frames
-        self.renderer = None #olympe renderer obj
-        self.stream_run = False #flag to monitor stream running or not
 
         #Video frame size and format
         self.stream_fps = 30 #average frame rate of the video capture
@@ -64,7 +54,7 @@ class rtsp_processing:
         #redis configurations to save the frames
         self.full_sigmund = np.zeros((self.stream_height, self.stream_width, 3)) #no signal screen image
         self.full_sigmund = self.add_text_image(self.full_sigmund, f'NO SIGNAL', (30, 30), 0.5, color=(255, 255, 255))  #add text to the no signal screen image
-        self.redis_client = redis.Redis(host='spade_redis_1', port=6379, db=0, health_check_interval=30)
+        self.redis_client = redis.Redis(host=os.getenv('RESTREAM_REDIS_HOST'), port=6379, db=0, health_check_interval=30)
         try:
             self.redis_client.ping()
             print('[rtsp_utils] Connected to the Redis server!')
@@ -91,23 +81,27 @@ class rtsp_processing:
                                  lineType=cv2.LINE_AA)
         return proc_image
 
-    def yuv_frame_cb(self, yuv_frame):
-        '''
-        :param yuv_frame: frame acquired by olympe
-        '''
-        yuv_frame.ref() #reference the frame
-        print('frame acquired!')
-        self.frame_queue.put_nowait(yuv_frame) #add the frame to the queue
+    def yuv_frame_cb_wrapper(self, frame_queue):
+        """
+        Creates a callback function that uses the provided frame_queue.
+        """
+        def yuv_frame_cb(yuv_frame):
+            """
+            This function will be called by Olympe for each decoded YUV frame.
+            :type yuv_frame: olympe.VideoFrame
+            """
+            yuv_frame.ref()
+            frame_queue.put_nowait(yuv_frame)  # Put frame in provided queue
+        return yuv_frame_cb
 
-    def flush_cb(self, stream):
-        '''
-        :param stream: dictionary with information on the stream obj
-        '''
-        if stream["vdef_format"] != olympe.VDEF_I420:
+    def flush_cb_wrapper(self, frame_buffer):
+        def flush_cb(stream):
+            if stream["vdef_format"] != olympe.VDEF_I420:
+                return True
+            while not frame_buffer.empty():
+                frame_buffer.get_nowait().unref()
             return True
-        while not self.frame_queue.empty():
-            self.frame_queue.get_nowait().unref()
-        return True
+        return flush_cb
 
     def start_cb(self):
         pass
@@ -116,48 +110,38 @@ class rtsp_processing:
         pass
 
     def h264_frame_cb(self, h264_frame):
-        '''
-        :param h264_frame: frame acquired by olympe
-        '''
+        """
+        This function will be called by Olympe for each new h264 frame.
+
+            :type yuv_frame: olympe.VideoFrame
+        """
         pass
 
-    def retrieve_frames(self, stream_flag_event):
+    def retrieve_frames(self, stream_flag_event, frame_buffer):
         '''
         :param stream_flag_event: the event object of the thread to monitor
         '''
-        offline_flag = False  #flag to monitor the evolution of the event state
+        offline_flag = False #flag to monitor the evolution of the event state
         last_telemetry = 'waiting telemetry data...'  #variable to update when no message has been received prior to last update
-        while True:
-            try:
-                #offline_flag = stream_flag_event.is_set()  # update the flag with the current state
-                #if offline_flag:
-                #    break
+        if not offline_flag:
+            while True:
+                if offline_flag:
+                    break
 
-                yuv_frame = self.frame_queue.get(timeout=0.1) #acquire a frame from the queue
-                yuv_frame_array = yuv_frame.as_ndarray() #convert the frame to numpy array
+                curr_yuv_frame = frame_buffer.get()
+                curr_frame = curr_yuv_frame.as_ndarray() #read the frame as array
 
                 #Avoiding blockage by empty queue
                 if not self.message_queue.empty():
-                    curr_telemetry = f'{self.message_queue.get()}'  # only get() from the queue if not empty
-                    last_telemetry = curr_telemetry  # update the text variable
+                    curr_telemetry = f'{self.message_queue.get()}'  #only get() from the queue if not empty
+                    last_telemetry = curr_telemetry #update the text variable
                 else:
-                    curr_telemetry = last_telemetry  # string to avoid blocking and keep printing the last update
+                    curr_telemetry = last_telemetry  #string to avoid blocking and keep printing the last update
 
-                yuv_frame_array = self.add_text_image(yuv_frame_array, curr_telemetry, (30, 30),0.25)  #add telemetry data to the video
-                _, buffer = cv2.imencode('.jpg', yuv_frame_array)  #decode the array to .jpg image
-                self.redis_client.publish('frame_buffer', buffer.tobytes())  #publish in the redis topic
+                curr_array = self.add_text_image(curr_frame, curr_telemetry, (30,30), 0.25) #add telemetry data to the video
+                _, buffer = cv2.imencode('.jpg', curr_array) #decode the array to .jpg image
+                self.redis_client.publish('frame_buffer', buffer.tobytes()) #publish in the redis topic
 
-            except queue.Empty:
-                continue
-
-            yuv_frame.unref() #unreference frame when done to avoid memory issues
-
-    def run_frame_acq(self, stream_flag_event):
-        while True:
-            if not stream_flag_event.is_set():
-                self.retrieve_frames(stream_flag_event)  # run the drone camera stream
-            else:
-                self.offline_mode(stream_flag_event)  # run the offline camera mode stream
 
     def offline_mode(self, stream_flag_event):
         '''
@@ -172,19 +156,29 @@ class rtsp_processing:
                 self.redis_client.publish('frame_buffer', buffer.tobytes())  #publish in the redis topic
                 time.sleep(5) #sleep between publishes to avoid over-filling the buffer
 
-    def run_stream(self):
-        #set callback functions to process the frames
-        self.acq_data.mission_data.drone.streaming.set_callbacks(
-            raw_cb=self.yuv_frame_cb,
+    def run_frame_acquiring(self, stream_flag_event, frame_buffer):
+        '''
+        :param stream_flag_event: the event object of the thread to monitor
+        '''
+        print('[rtsp_utils] Frame acquiring!')
+        while True:
+            if not stream_flag_event.is_set():
+                self.retrieve_frames(stream_flag_event, frame_buffer) #run the drone camera stream
+            else:
+                self.offline_mode(stream_flag_event) #run the offline camera mode stream
+
+    def run_stream(self, frame_buffer):
+        # Setup your callback functions to do some live video processing
+        self.drone.streaming.set_callbacks(
+            raw_cb=self.yuv_frame_cb_wrapper(frame_buffer),
             h264_cb=self.h264_frame_cb,
             start_cb=self.start_cb,
             end_cb=self.end_cb,
-            flush_raw_cb=self.flush_cb,
+            flush_raw_cb=self.flush_cb_wrapper(frame_buffer),
         )
 
-        #Run the frame acquisition
-        self.acq_data.mission_data.drone.streaming.start() #start the streaming
-        #self.frame_proc_thread.start() #start the frame feeding
+        # Start video streaming
+        self.drone.streaming.start()
 
     def on_message(self, client, userdata, msg):
         '''
@@ -236,7 +230,7 @@ class restreaming(GstRtspServer.RTSPMediaFactory):
         self.frame_condition = threading.Condition()
 
         #Redis configurations to set up and receive the frames
-        self.redis_client = redis.Redis(host='spade_redis_1', port=6379, db=0, health_check_interval=30)
+        self.redis_client = redis.Redis(host=os.getenv('RESTREAM_REDIS_HOST'), port=6379, db=0, health_check_interval=30)
         self.frame_subscription = self.redis_client.pubsub()
         self.frame_subscription.subscribe(**{'frame_buffer': self.buffer_callback})
         self.frame = None

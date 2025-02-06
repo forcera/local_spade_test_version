@@ -26,7 +26,7 @@ RUN DEBIAN_FRONTEND="noninteractive" \
     python3-distutils=3.8.10-0ubuntu1~20.04 \
     curl \
     libgl1=1.3.2-1~ubuntu0.20.04.2 \
-    tzdata=2024a-0ubuntu0.20.04.1 \
+    tzdata \
     python3-pip=20.0.2-5ubuntu1.11 \
     python3-dev=3.8.2-0ubuntu2 \
     build-essential=12.8ubuntu1.1 \
